@@ -1,44 +1,44 @@
 name: "Run ECS task"
 description: "GitHub Action to run a task on Amazon ECS and output CloudWatch Logs"
-author: yyoshiki41
+author: w40141
 branding:
   icon: "cloud"
   color: "orange"
 
 inputs:
-  region:
-    description: "AWS Region"
-    required: false
-    default: "ap-northeast-1"
-  task-definition:
-    required: true
-    description: "The path to the task definition file"
-  task-definition-family:
-    description: "The name for your task definition"
-    required: true
-  launch-type:
-    description: "Launch type"
-    required: false
-    default: "FARGATE"
   cluster:
     description: "ECS Cluster name"
     required: true
-  subnets:
-    description: "awsvpcConfiguration values: ['subnet-00', ...]"
+  task-definition:
+    required: true
+    description: "The task definition name"
+  task-definition-family:
+    description: "The name for your task definition"
     required: true
   security-groups:
     description: "awsvpcConfiguration values: ['sg-00', ...]"
+    required: true
+  subnets:
+    description: "awsvpcConfiguration values: ['subnet-00', ...]"
     required: true
   assign-public-ip:
     description: "awsvpcConfiguration values"
     required: false
     default: "DISABLED"
-  container-name:
-    description: "The name of the container that run command. This parameter is required if any override is specified."
-    required: false
   command:
     description: "Overrides the default command from the Docker image or the task definition. This parameter is required if any override is specified."
     required: false
+  container-name:
+    description: "The name of the container that run command. This parameter is required if any override is specified."
+    required: false
+  launch-type:
+    description: "Launch type"
+    required: false
+    default: "FARGATE"
+  region:
+    description: "AWS Region"
+    required: false
+    default: "ap-northeast-1"
 
 outputs:
   task-id:
@@ -73,7 +73,7 @@ runs:
           --family ${{ inputs.task-definition-family }} \
           --cli-input-json file://${{ inputs.task-definition }} \
           --query taskDefinition.revision)
-        echo "::set-output name=revision::$revision"
+        echo "revision=$revision" >> $GITHUB_OUTPUT
 
     - name: Run ECS task
       shell: bash
@@ -84,24 +84,26 @@ runs:
       run: |
         if [ '${{ inputs.container-name }}' != '' ] && [ '${{ inputs.command }}' != '' ]; then
           task_arn=$(aws ecs run-task \
-            --region ${{ inputs.region }} \
-            --launch-type ${{ inputs.launch-type }} \
             --cluster ${{ inputs.cluster }} \
+            --launch-type ${{ inputs.launch-type }} \
             --network-configuration 'awsvpcConfiguration=${{ env.vpc_configuration }}' \
-            --task-definition ${{ inputs.task-definition-family }}:${{ steps.task-def-register.outputs.revision }} \
+            --output text \
             --overrides '${{ env.container_overrides }}' \
-            --query tasks[0].taskArn --output text)
+            --query tasks[0].taskArn \
+            --region ${{ inputs.region }} \
+            --task-definition ${{ inputs.task-definition-family }}:${{ steps.task-def-register.outputs.revision }})
         else
           task_arn=$(aws ecs run-task \
-            --region ${{ inputs.region }} \
-            --launch-type ${{ inputs.launch-type }} \
             --cluster ${{ inputs.cluster }} \
+            --launch-type ${{ inputs.launch-type }} \
             --network-configuration 'awsvpcConfiguration=${{ env.vpc_configuration }}' \
-            --task-definition ${{ inputs.task-definition-family }}:${{ steps.task-def-register.outputs.revision }} \
-            --query tasks[0].taskArn --output text)
+            --output text \
+            --query tasks[0].taskArn \
+            --region ${{ inputs.region }} \
+            --task-definition ${{ inputs.task-definition-family }}:${{ steps.task-def-register.outputs.revision }})
         fi
-        echo "::set-output name=task_arn::$task_arn"
-        echo "::set-output name=task_id::${task_arn/*\//}"
+        echo "task_arn=$task_arn" >> $GITHUB_OUTPUT
+        echo "task_id=${task_arn/*\//}" >> $GITHUB_OUTPUT
 
     - name: Wait until a task stopped
       shell: bash
@@ -126,13 +128,13 @@ runs:
         echo '::echo::on'
         out=$(ecs-cli logs --timestamps \
           --cluster ${{ inputs.cluster }} \
-          --task-id ${{ steps.run-task.outputs.task_id }} \
-          --task-def ${{ inputs.task-definition-family }}:${{ steps.task-def-register.outputs.revision }})
+          --task-def ${{ inputs.task-definition-family }}:${{ steps.task-def-register.outputs.revision }} \
+          --task-id ${{ steps.run-task.outputs.task_id }})
         out="${out//'%'/'%25'}"
         out="${out//$'\n'/'%0A'}"
         out="${out//$'\r'/'%0D'}"
         out="${out//$'^'/'d'}"
-        echo "::set-output name=out::$out"
+        echo "out=$out" >> $GITHUB_OUTPUT
         echo "::endgroup::"
 
     - name: Check exit code in tasks
@@ -140,11 +142,11 @@ runs:
       id: task-exit-code
       run: |
         exitCode=$(aws ecs describe-tasks \
-          --region ${{ inputs.region }} \
           --cluster ${{ inputs.cluster }} \
-          --tasks ${{ steps.run-task.outputs.task_arn }} \
+          --output text \
           --query tasks[0].containers[0].exitCode \
-          --output text)
+          --region ${{ inputs.region }} \
+          --tasks ${{ steps.run-task.outputs.task_arn }})
         if [ "$exitCode" != "0" ]; then
           echo "detected run-task failure"
           exit $exitCode
